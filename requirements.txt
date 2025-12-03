@@ -1,0 +1,4 @@
+flask
+python-dotenv
+supabase
+curl-cffi
