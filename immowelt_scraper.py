@@ -510,6 +510,12 @@ def run_scraper_for_account(account: dict, supabase: Client):
     existing_listing_data = account.get('listing_data', {}) or {}
     previous_offers = existing_listing_data.get('offers', [])
     
+    # Check if this is the first run (no previous offers)
+    is_first_run = len(previous_offers) == 0
+    
+    if is_first_run:
+        logger.info(f"🎯 [{account['email']}] First run detected - initializing with {len(listings)} listings (no contact attempts)")
+    
     # Get previous IDs
     previous_ids = {offer['id'] for offer in previous_offers}
     
@@ -556,6 +562,11 @@ def run_scraper_for_account(account: dict, supabase: Client):
     # ===================================================
     # AUTO-CONTACT NEW OFFERS
     # ===================================================
+    
+    # Skip contacting on first run (when initializing listings)
+    if is_first_run:
+        logger.info(f"🎯 [{account['email']}] First run complete - {len(new_offers)} listings saved. Contact will start on next run.")
+        return True, len(new_offers)
     
     # Get contact form from configuration (root level)
     contact_form_config = config.get('contact_form')
@@ -605,7 +616,6 @@ def run_scraper_for_account(account: dict, supabase: Client):
         logger.info(f"   🔗 URL: {offer_url}")
         
         result = client.contact_listing(str(offer_id), contact_form)
-        
         if result:
             contacted_count += 1
             newly_contacted_ids.append(offer_id)
@@ -614,8 +624,8 @@ def run_scraper_for_account(account: dict, supabase: Client):
             failed_count += 1
             logger.error(f"   ❌ [{account['email']}] Failed to contact offer {offer_id}")
         
-        # Random delay between contacts (1-2 seconds)
-        time.sleep(random.uniform(1, 2))
+        # Random delay between contacts (2-3 seconds)
+        time.sleep(random.uniform(2, 3))
     
     # Update contacted_ids history (keep last 50)
     if newly_contacted_ids:
