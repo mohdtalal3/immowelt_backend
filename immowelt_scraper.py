@@ -248,6 +248,7 @@ class ImmoweltClient:
             )
             
             if response.status_code != 200:
+                print(response.text)
                 logger.error(f"❌ Search request failed: {response.status_code}")
                 return []
             
