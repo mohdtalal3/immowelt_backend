@@ -36,15 +36,7 @@ class ImmoweltClient:
     ]
     
     def __init__(self):
-        # Initialize curl_cffi session with browser impersonation
-        self.session = requests.Session(impersonate="chrome107")
-        
-        self.session.headers.update({
-            "User-Agent": self.USER_AGENT,
-            "Accept": "*/*",
-        })
-        
-        # Session tokens
+        # Session tokens (no persistent session, create new request each time)
         self.tokens = {}
         self.session_created_at = None
         
@@ -54,26 +46,32 @@ class ImmoweltClient:
             'http': rotating_proxy,
             'https': rotating_proxy
         }
-        print(rotating_proxy)
         logger.info(f"🔒 Using ROTATING_PROXY: {rotating_proxy.split('@')[-1] if rotating_proxy and '@' in rotating_proxy else rotating_proxy}")
     
     # ---------------------------------------------------
     # Token Management
     # ---------------------------------------------------
-    def extract_tokens_from_cookies(self) -> dict:
-        """Extract required tokens from session cookies."""
+    def get_cookie_jar(self) -> dict:
+        """Build cookie jar from tokens for requests."""
+        return {
+            "did": self.tokens.get("did"),
+            "did_compat": self.tokens.get("did_compat"),
+            "auth0": self.tokens.get("auth0"),
+            "auth0_compat": self.tokens.get("auth0_compat"),
+        }
+    
+    def extract_tokens_from_cookies(self, cookies) -> dict:
+        """Extract required tokens from response cookies."""
         tokens = {}
-        for name, value in self.session.cookies.items():
-            if name in self.WANTED_KEYS:
-                tokens[name] = value
+        if hasattr(cookies, 'items'):
+            for name, value in cookies.items():
+                if name in self.WANTED_KEYS:
+                    tokens[name] = value
         return tokens
     
-    def set_tokens_to_cookies(self, tokens: dict):
-        """Set tokens to session cookies."""
-        for key, value in tokens.items():
-            if key in self.WANTED_KEYS:
-                self.session.cookies.set(key, value, domain=".immowelt.de")
-        self.tokens = tokens
+    def set_tokens_from_dict(self, tokens: dict):
+        """Set tokens from dictionary."""
+        self.tokens = {k: v for k, v in tokens.items() if k in self.WANTED_KEYS}
     
     def get_session_dict(self) -> dict:
         """Return session details as a dictionary for storage."""
@@ -86,7 +84,6 @@ class ImmoweltClient:
         """Load session from a dictionary."""
         self.tokens = {k: v for k, v in session_data.items() if k in self.WANTED_KEYS}
         self.session_created_at = session_data.get('session_created_at')
-        self.set_tokens_to_cookies(self.tokens)
     
     # ---------------------------------------------------
     # Login Flow
@@ -99,8 +96,15 @@ class ImmoweltClient:
         try:
             logger.info(f"🔐 Starting login for {email}...")
             
+            # Create a temporary session just for login flow
+            session = requests.Session(impersonate="chrome107")
+            session.headers.update({
+                "User-Agent": self.USER_AGENT,
+                "Accept": "*/*",
+            })
+            
             # Step 1: Get initial login page
-            r1 = self.session.get(self.LOGIN_START_URL, allow_redirects=True, proxies=self.proxies)
+            r1 = session.get(self.LOGIN_START_URL, allow_redirects=True, proxies=self.proxies)
             login_page_url = r1.url
             
             # Extract state parameter
@@ -118,7 +122,7 @@ class ImmoweltClient:
                 "password": password,
             }
             
-            r2 = self.session.post(
+            r2 = session.post(
                 login_page_url,
                 data=payload,
                 headers={
@@ -137,11 +141,11 @@ class ImmoweltClient:
                 if next_url.startswith("/"):
                     next_url = urljoin("https://signin.immowelt.de", next_url)
                 
-                r = self.session.get(next_url, allow_redirects=False, proxies=self.proxies)
+                r = session.get(next_url, allow_redirects=False, proxies=self.proxies)
                 next_url = r.headers.get("Location")
             
-            # Extract tokens from cookies
-            self.tokens = self.extract_tokens_from_cookies()
+            # Extract tokens from session cookies before it gets destroyed
+            self.tokens = self.extract_tokens_from_cookies(session.cookies)
             
             if not self.tokens.get("oauth.access.token"):
                 logger.error(f"❌ Login failed for {email} - no access token found")
@@ -149,6 +153,8 @@ class ImmoweltClient:
             
             self.session_created_at = datetime.now().isoformat()
             logger.info(f"✅ Login successful for {email}")
+            
+            # Session will be destroyed when function exits
             return True
             
         except Exception as e:
@@ -170,9 +176,15 @@ class ImmoweltClient:
                 else:
                     logger.info("♻️ Refreshing tokens...")
                 
-                r = self.session.get(
+                # Build cookie jar from current tokens
+                cookie_jar = self.get_cookie_jar()
+                
+                # Fresh request with current cookies
+                r = requests.get(
                     self.REFRESH_URL,
+                    impersonate="chrome107",
                     headers={
+                        "User-Agent": self.USER_AGENT,
                         "Accept": "*/*",
                         "Origin": "https://www.immowelt.de",
                         "Referer": "https://www.immowelt.de/",
@@ -180,6 +192,7 @@ class ImmoweltClient:
                         "Sec-Fetch-Mode": "cors",
                         "Sec-Fetch-Dest": "empty",
                     },
+                    cookies=cookie_jar,
                     proxies=self.proxies
                 )
                 
@@ -195,8 +208,10 @@ class ImmoweltClient:
                         continue
                     return False
                 
-                # Extract updated tokens
-                self.tokens = self.extract_tokens_from_cookies()
+                # Extract updated tokens from response cookies
+                new_tokens = self.extract_tokens_from_cookies(r.cookies)
+                if new_tokens:
+                    self.tokens.update(new_tokens)
                 self.session_created_at = datetime.now().isoformat()
                 
                 logger.info("✅ Tokens refreshed successfully")
@@ -259,15 +274,28 @@ class ImmoweltClient:
         
         max_retries = 20
         
+        # Build cookie jar from current tokens
+        cookie_jar = self.get_cookie_jar()
+        
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
                     logger.info(f"🔍 Retrying search (attempt {attempt + 1}/{max_retries})...")
                     time.sleep(2)  # Wait before retry
                 
-                response = self.session.post(
+                # Fresh request each time
+                response = requests.post(
                     self.SEARCH_API_URL,
-                    headers=headers,
+                    impersonate="chrome107",
+                    headers={
+                        "user-agent": self.USER_AGENT,
+                        "accept": "*/*",
+                        "content-type": "application/json; charset=utf-8",
+                        "origin": "https://www.immowelt.de",
+                        "referer": "https://www.immowelt.de/classified-search",
+                        "Sec-Fetch-Site": "same-origin",
+                    },
+                    cookies=cookie_jar,
                     json=payload,
                     proxies=self.proxies,
                     timeout=30
@@ -358,22 +386,8 @@ class ImmoweltClient:
             "platform": "Website",
         }
         
-        headers = {
-            "user-agent": self.USER_AGENT,
-            "accept": "application/json",
-            "content-type": "text/plain;charset=UTF-8",
-            "origin": "https://www.immowelt.de",
-            "referer": "https://www.immowelt.de",
-            "authorization": f"Bearer {self.tokens.get('oauth.access.token')}"
-        }
-        
         # Build cookie jar for request
-        cookie_jar = {
-            "did": self.tokens.get("did"),
-            "did_compat": self.tokens.get("did_compat"),
-            "auth0": self.tokens.get("auth0"),
-            "auth0_compat": self.tokens.get("auth0_compat"),
-        }
+        cookie_jar = self.get_cookie_jar()
         
         logger.info(f"📤 Contacting listing {listing_id}...")
         
@@ -385,9 +399,18 @@ class ImmoweltClient:
                     logger.info(f"📤 Retrying contact for listing {listing_id} (attempt {attempt + 1}/{max_retries})...")
                     time.sleep(2)  # Wait before retry
                 
-                response = self.session.post(
+                # Fresh request each time
+                response = requests.post(
                     self.CONTACT_API_URL,
-                    headers=headers,
+                    impersonate="chrome107",
+                    headers={
+                        "user-agent": self.USER_AGENT,
+                        "accept": "application/json",
+                        "content-type": "text/plain;charset=UTF-8",
+                        "origin": "https://www.immowelt.de",
+                        "referer": "https://www.immowelt.de",
+                        "authorization": f"Bearer {self.tokens.get('oauth.access.token')}"
+                    },
                     cookies=cookie_jar,
                     json=payload,
                     proxies=self.proxies,
