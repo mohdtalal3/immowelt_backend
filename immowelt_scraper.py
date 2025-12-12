@@ -23,7 +23,7 @@ class ImmoweltClient:
     CONTACT_API_URL = "https://www.immowelt.de/contact-request-service/contacting"
     
     # User Agent
-    USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
     
     # Required cookie/token keys
     WANTED_KEYS = [
@@ -35,9 +35,9 @@ class ImmoweltClient:
         "oauth.access.expiration"
     ]
     
-    def __init__(self, proxy_url: str = None):
+    def __init__(self):
         # Initialize curl_cffi session with browser impersonation
-        self.session = requests.Session(impersonate="chrome131")
+        self.session = requests.Session(impersonate="chrome107")
         
         self.session.headers.update({
             "User-Agent": self.USER_AGENT,
@@ -48,14 +48,13 @@ class ImmoweltClient:
         self.tokens = {}
         self.session_created_at = None
         
-        # Setup proxy if provided
-        self.proxies = None
-        if proxy_url:
-            self.proxies = {
-                'http': proxy_url,
-                'https': proxy_url
-            }
-            logger.info(f"🔒 Proxy configured: {proxy_url.split('@')[-1] if '@' in proxy_url else proxy_url}")
+        # Setup proxy from ROTATING_PROXY environment variable
+        rotating_proxy = os.getenv('ROTATING_PROXY')
+        self.proxies = {
+            'http': rotating_proxy,
+            'https': rotating_proxy
+        }
+        logger.info(f"🔒 Using ROTATING_PROXY: {rotating_proxy.split('@')[-1] if rotating_proxy and '@' in rotating_proxy else rotating_proxy}")
     
     # ---------------------------------------------------
     # Token Management
@@ -160,36 +159,55 @@ class ImmoweltClient:
     # ---------------------------------------------------
     def refresh_session(self) -> bool:
         """Refresh tokens using existing cookies."""
-        try:
-            logger.info("♻️ Refreshing tokens...")
-            
-            r = self.session.get(
-                self.REFRESH_URL,
-                headers={
-                    "Accept": "*/*",
-                    "Origin": "https://www.immowelt.de",
-                    "Referer": "https://www.immowelt.de/",
-                    "Sec-Fetch-Site": "same-site",
-                    "Sec-Fetch-Mode": "cors",
-                    "Sec-Fetch-Dest": "empty",
-                },
-                proxies=self.proxies
-            )
-            
-            if r.status_code != 200:
-                logger.error(f"❌ Token refresh failed: {r.status_code}")
+        max_retries = 20
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    logger.info(f"♻️ Refreshing tokens (retry {attempt}/{max_retries})...")
+                    time.sleep(2)  # Wait before retry
+                else:
+                    logger.info("♻️ Refreshing tokens...")
+                
+                r = self.session.get(
+                    self.REFRESH_URL,
+                    headers={
+                        "Accept": "*/*",
+                        "Origin": "https://www.immowelt.de",
+                        "Referer": "https://www.immowelt.de/",
+                        "Sec-Fetch-Site": "same-site",
+                        "Sec-Fetch-Mode": "cors",
+                        "Sec-Fetch-Dest": "empty",
+                    },
+                    proxies=self.proxies
+                )
+                
+                # Check for captcha or 403 in response
+                if r.status_code == 403 or 'captcha' in r.text.lower() or '403' in r.text.lower():
+                    logger.warning(f"⚠️ Captcha/403 detected (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        continue
+                
+                if r.status_code != 200:
+                    logger.error(f"❌ Token refresh failed: {r.status_code}")
+                    if attempt < max_retries - 1:
+                        continue
+                    return False
+                
+                # Extract updated tokens
+                self.tokens = self.extract_tokens_from_cookies()
+                self.session_created_at = datetime.now().isoformat()
+                
+                logger.info("✅ Tokens refreshed successfully")
+                return True
+                
+            except Exception as e:
+                logger.error(f"❌ Token refresh error (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    continue
                 return False
-            
-            # Extract updated tokens
-            self.tokens = self.extract_tokens_from_cookies()
-            self.session_created_at = datetime.now().isoformat()
-            
-            logger.info("✅ Tokens refreshed successfully")
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ Token refresh error: {e}")
-            return False
+        
+        return False
     
     # ---------------------------------------------------
     # Listing Search
@@ -238,41 +256,60 @@ class ImmoweltClient:
                 filter_summary.append(f"{key}={value}")
         logger.info(f"🔍 Searching listings with filters: {', '.join(filter_summary) if filter_summary else 'none'}")
         
-        try:
-            response = self.session.post(
-                self.SEARCH_API_URL,
-                headers=headers,
-                json=payload,
-                proxies=self.proxies,
-                timeout=30
-            )
-            
-            if response.status_code != 200:
-                print(response.text)
-                logger.error(f"❌ Search request failed: {response.status_code}")
+        max_retries = 20
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    logger.info(f"🔍 Retrying search (attempt {attempt + 1}/{max_retries})...")
+                    time.sleep(2)  # Wait before retry
+                
+                response = self.session.post(
+                    self.SEARCH_API_URL,
+                    headers=headers,
+                    json=payload,
+                    proxies=self.proxies,
+                    timeout=30
+                )
+                
+                # Check for captcha or 403 in response
+                if response.status_code == 403 or 'captcha' in response.text.lower() or '403' in response.text.lower():
+                    logger.warning(f"⚠️ Captcha/403 detected during search (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        continue
+                
+                if response.status_code != 200:
+                    print(response.text)
+                    logger.error(f"❌ Search request failed: {response.status_code}")
+                    if attempt < max_retries - 1:
+                        continue
+                    return []
+                
+                data = response.json()
+                current_time = datetime.now()
+                
+                # Extract listings
+                listings = []
+                if 'classifieds' in data:
+                    for item in data['classifieds']:
+                        listing = {
+                            'id': item['id'],
+                            'url': f"https://www.immowelt.de/expose/{item['id']}",
+                            'title': item.get('title', 'Unknown'),
+                            'published': current_time.isoformat(timespec="seconds")  # Use current time as Immowelt doesn't provide timestamp
+                        }
+                        listings.append(listing)
+                
+                logger.info(f"✅ Found {len(listings)} listings")
+                return listings
+                
+            except Exception as e:
+                logger.error(f"❌ Error searching listings (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    continue
                 return []
-            
-            data = response.json()
-            current_time = datetime.now()
-            
-            # Extract listings
-            listings = []
-            if 'classifieds' in data:
-                for item in data['classifieds']:
-                    listing = {
-                        'id': item['id'],
-                        'url': f"https://www.immowelt.de/expose/{item['id']}",
-                        'title': item.get('title', 'Unknown'),
-                        'published': current_time.isoformat(timespec="seconds")  # Use current time as Immowelt doesn't provide timestamp
-                    }
-                    listings.append(listing)
-            
-            logger.info(f"✅ Found {len(listings)} listings")
-            return listings
-            
-        except Exception as e:
-            logger.error(f"❌ Error searching listings: {e}")
-            return []
+        
+        return []
     
     # ---------------------------------------------------
     # Contact Listing
@@ -339,27 +376,46 @@ class ImmoweltClient:
         
         logger.info(f"📤 Contacting listing {listing_id}...")
         
-        try:
-            response = self.session.post(
-                self.CONTACT_API_URL,
-                headers=headers,
-                cookies=cookie_jar,
-                json=payload,
-                proxies=self.proxies,
-                timeout=30
-            )
-            
-            if response.status_code in [200, 201]:
-                logger.info(f"✅ Successfully contacted listing {listing_id}")
-                return True
-            else:
-                logger.error(f"❌ Failed to contact listing {listing_id}: {response.status_code}")
-                logger.error(f"   Response: {response.text[:500]}")
-                return False
+        max_retries = 20
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    logger.info(f"📤 Retrying contact for listing {listing_id} (attempt {attempt + 1}/{max_retries})...")
+                    time.sleep(2)  # Wait before retry
                 
-        except Exception as e:
-            logger.error(f"❌ Error contacting listing {listing_id}: {e}")
-            return False
+                response = self.session.post(
+                    self.CONTACT_API_URL,
+                    headers=headers,
+                    cookies=cookie_jar,
+                    json=payload,
+                    proxies=self.proxies,
+                    timeout=30
+                )
+                
+                # Check for captcha or 403 in response
+                if response.status_code == 403 or 'captcha' in response.text.lower() or '403' in response.text.lower():
+                    logger.warning(f"⚠️ Captcha/403 detected for listing {listing_id} (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        continue
+                
+                if response.status_code in [200, 201]:
+                    logger.info(f"✅ Successfully contacted listing {listing_id}")
+                    return True
+                else:
+                    logger.error(f"❌ Failed to contact listing {listing_id}: {response.status_code}")
+                    logger.error(f"   Response: {response.text[:500]}")
+                    if attempt < max_retries - 1:
+                        continue
+                    return False
+                    
+            except Exception as e:
+                logger.error(f"❌ Error contacting listing {listing_id} (attempt {attempt + 1}/{max_retries}): {e}")
+                if attempt < max_retries - 1:
+                    continue
+                return False
+        
+        return False
 
 
 # ===================================================
@@ -468,24 +524,11 @@ def run_scraper_for_account(account: dict, supabase: Client):
     logger.info(f"🏃 Running scraper for: {account['email']}")
     logger.info(f"{'='*60}")
     
+    # Initialize client (will automatically use ROTATING_PROXY from environment)
+    client = ImmoweltClient()
+    
     # Get configuration from account
     config = account.get('configuration', {})
-    proxy_port = config.get('proxy_port')
-    
-    # Build proxy URL if proxy_port is provided
-    proxy_url = None
-    if proxy_port:
-        proxy_base = os.getenv('PROXY_URL')
-        if proxy_base:
-            proxy_url = f"{proxy_base}{proxy_port}"
-            logger.info(f"🔒 [{account['email']}] Using proxy port: {proxy_port}")
-        else:
-            logger.warning(f"⚠️ [{account['email']}] PROXY_URL not found in environment, running without proxy")
-    else:
-        logger.info(f"ℹ️ [{account['email']}] No proxy port configured, running without proxy")
-    
-    # Initialize client with proxy
-    client = ImmoweltClient(proxy_url=proxy_url)
     
     # Ensure valid session before scraping
     logger.info(f"🔐 [{account['email']}] Validating session...")
