@@ -54,6 +54,7 @@ class ImmoweltClient:
             'http': rotating_proxy,
             'https': rotating_proxy
         }
+        print(rotating_proxy)
         logger.info(f"🔒 Using ROTATING_PROXY: {rotating_proxy.split('@')[-1] if rotating_proxy and '@' in rotating_proxy else rotating_proxy}")
     
     # ---------------------------------------------------
