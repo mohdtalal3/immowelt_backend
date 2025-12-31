@@ -653,7 +653,7 @@ def run_scraper_for_account(account: dict, supabase: Client):
     contact_form = {**contact_form_config, 'message': contact_message}
     logger.info(f"📝 [{account['email']}] Using message from separate 'message' field: {contact_message[:50]}...")
     
-    # Load contacted IDs history (last 50) to prevent duplicates
+    # Load contacted IDs history (last 1000) to prevent duplicates
     contacted_ids_history = existing_listing_data.get('contacted_ids', [])
     if not isinstance(contacted_ids_history, list):
         contacted_ids_history = []
@@ -695,12 +695,12 @@ def run_scraper_for_account(account: dict, supabase: Client):
         # Random delay between contacts (2-3 seconds)
         time.sleep(random.uniform(2, 3))
     
-    # Update contacted_ids history (keep last 50)
+    # Update contacted_ids history (keep last 1000)
     if newly_contacted_ids:
         # Merge new IDs with existing history
         updated_contacted_ids = newly_contacted_ids + contacted_ids_history
-        # Keep only last 50 IDs
-        updated_contacted_ids = updated_contacted_ids[:50]
+        # Keep only last 1000 IDs
+        updated_contacted_ids = updated_contacted_ids[:1000]
         
         # Update listing_data with new contacted_ids history
         updated_listing_data['contacted_ids'] = updated_contacted_ids
