@@ -28,6 +28,14 @@ app = Flask(__name__)
 # Initialize global Supabase client (thread-safe, reusable)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+
+def account_label(account: dict) -> str:
+    """Return email with optional filter name for log messages."""
+    label = account['email']
+    if account.get('filter_name'):
+        label += f" [{account['filter_name']}]"
+    return label
+
 # Global state
 scraper_stats = {
     'total_runs': 0,
@@ -65,7 +73,7 @@ def get_accounts_ready_to_scrape(supabase: Client):
             scrape_enabled = config.get('scrape_enabled', False)
             
             if not scrape_enabled:
-                logger.info(f"⏸️ Account {account['email']} has scraping disabled")
+                logger.info(f"⏸️ Account {account_label(account)} has scraping disabled")
                 continue
             
             # Check if account has been updated recently
@@ -86,12 +94,12 @@ def get_accounts_ready_to_scrape(supabase: Client):
                 
                 if time_since_update >= SCRAPER_INTERVAL:
                     ready_accounts.append(account)
-                    logger.info(f"✅ Account {account['email']} ready (last updated {time_since_update:.1f} min ago)")
+                    logger.info(f"✅ Account {account_label(account)} ready (last updated {time_since_update:.1f} min ago)")
                 else:
-                    logger.info(f"⏳ Account {account['email']} not ready (last updated {time_since_update:.1f} min ago, needs {SCRAPER_INTERVAL - time_since_update:.1f} more min)")
+                    logger.info(f"⏳ Account {account_label(account)} not ready (last updated {time_since_update:.1f} min ago, needs {SCRAPER_INTERVAL - time_since_update:.1f} more min)")
             
             except Exception as e:
-                logger.warning(f"⚠️ Error parsing timestamp for {account['email']}: {e}")
+                logger.warning(f"⚠️ Error parsing timestamp for {account_label(account)}: {e}")
                 # If can't parse, consider it ready
                 ready_accounts.append(account)
         
@@ -111,10 +119,10 @@ def process_account(account: dict):
     """
     try:
         success, new_offers_count = run_scraper_for_account(account, supabase)
-        return (account['email'], success, new_offers_count)
+        return (account_label(account), success, new_offers_count)
     except Exception as e:
-        logger.error(f"❌ Error processing account {account['email']}: {e}")
-        return (account['email'], False, 0)
+        logger.error(f"❌ Error processing account {account_label(account)}: {e}")
+        return (account_label(account), False, 0)
 
 
 def scraper_queue_thread():
@@ -183,7 +191,7 @@ def scraper_queue_thread():
                         
                         except Exception as e:
                             scraper_stats['failed_runs'] += 1
-                            logger.error(f"❌ Exception processing account {account['email']}: {e}")
+                            logger.error(f"❌ Exception processing account {account_label(account)}: {e}")
                     
                     scraper_stats['currently_running'] = 0
                 
