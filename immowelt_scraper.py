@@ -184,7 +184,6 @@ class ImmoweltClient:
                     self.REFRESH_URL,
                     impersonate="chrome131",
                     headers={
-                        "User-Agent": self.USER_AGENT,
                         "Accept": "*/*",
                         "Origin": "https://www.immowelt.de",
                         "Referer": "https://www.immowelt.de/",
