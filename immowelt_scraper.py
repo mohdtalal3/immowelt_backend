@@ -182,7 +182,7 @@ class ImmoweltClient:
                 # Fresh request with current cookies
                 r = requests.get(
                     self.REFRESH_URL,
-                    impersonate="chrome107",
+                    impersonate="chrome110",
                     headers={
                         "User-Agent": self.USER_AGENT,
                         "Accept": "*/*",
@@ -286,7 +286,7 @@ class ImmoweltClient:
                 # Fresh request each time
                 response = requests.post(
                     self.SEARCH_API_URL,
-                    impersonate="chrome107",
+                    impersonate="chrome110",
                     headers={
                         "user-agent": self.USER_AGENT,
                         "accept": "*/*",
@@ -402,7 +402,7 @@ class ImmoweltClient:
                 # Fresh request each time
                 response = requests.post(
                     self.CONTACT_API_URL,
-                    impersonate="chrome107",
+                    impersonate="chrome110",
                     headers={
                         "user-agent": self.USER_AGENT,
                         "accept": "application/json",
