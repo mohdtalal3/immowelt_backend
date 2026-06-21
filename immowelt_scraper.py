@@ -286,7 +286,7 @@ class ImmoweltClient:
                 # Fresh request each time
                 response = requests.post(
                     self.SEARCH_API_URL,
-                    impersonate="chrome131",
+                    impersonate="chrome107",
                     headers={
                         "user-agent": self.USER_AGENT,
                         "accept": "*/*",
