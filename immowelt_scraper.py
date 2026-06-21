@@ -402,7 +402,7 @@ class ImmoweltClient:
                 # Fresh request each time
                 response = requests.post(
                     self.CONTACT_API_URL,
-                    impersonate="chrome107",
+                    impersonate="chrome131",
                     headers={
                         "user-agent": self.USER_AGENT,
                         "accept": "application/json",
