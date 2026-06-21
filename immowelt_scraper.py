@@ -21,6 +21,7 @@ class ImmoweltClient:
     REFRESH_URL = "https://signin.immowelt.de/refresh"
     SEARCH_API_URL = "https://www.immowelt.de/serp-bff/search"
     CONTACT_API_URL = "https://www.immowelt.de/contact-request-service/contacting"
+    SCRAPPEY_API_URL = "https://publisher.scrappey.com/api/v1"
     
     # User Agent
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
@@ -97,7 +98,7 @@ class ImmoweltClient:
             logger.info(f"🔐 Starting login for {email}...")
             
             # Create a temporary session just for login flow
-            session = requests.Session(impersonate="chrome110")
+            session = requests.Session(impersonate="chrome107")
             session.headers.update({
                 "User-Agent": self.USER_AGENT,
                 "Accept": "*/*",
@@ -182,7 +183,7 @@ class ImmoweltClient:
                 # Fresh request with current cookies
                 r = requests.get(
                     self.REFRESH_URL,
-                    impersonate="chrome110",
+                    impersonate="chrome107",
                     headers={
                         "User-Agent": self.USER_AGENT,
                         "Accept": "*/*",
@@ -286,7 +287,7 @@ class ImmoweltClient:
                 # Fresh request each time
                 response = requests.post(
                     self.SEARCH_API_URL,
-                    impersonate="chrome110",
+                    impersonate="chrome107",
                     headers={
                         "user-agent": self.USER_AGENT,
                         "accept": "*/*",
@@ -391,6 +392,33 @@ class ImmoweltClient:
         
         logger.info(f"📤 Contacting listing {listing_id}...")
         
+        scrappey_api_key = os.getenv("SCRAPPEY_API_KEY")
+        if not scrappey_api_key:
+            raise RuntimeError("SCRAPPEY_API_KEY not set")
+        
+        # Build cookie string for Scrappey
+        cookie_string = "; ".join(f"{k}={v}" for k, v in cookie_jar.items() if v)
+        
+        scrappey_payload = {
+            "cmd": "request.post",
+            "requestType": "request",
+            "url": self.CONTACT_API_URL,
+            "postData": payload,
+            "customHeaders": {
+                "user-agent": self.USER_AGENT,
+                "accept": "application/json",
+                "content-type": "text/plain;charset=UTF-8",
+                "origin": "https://www.immowelt.de",
+                "referer": "https://www.immowelt.de",
+                "authorization": f"Bearer {self.tokens.get('oauth.access.token')}"
+            },
+            "cookiejar": cookie_string,
+            "premiumProxy": True,
+            "proxyCountry": "Germany",
+            "retries": 1,
+            "automaticallySolveCaptcha": True
+        }
+        
         max_retries = 20
         
         for attempt in range(max_retries):
@@ -399,36 +427,35 @@ class ImmoweltClient:
                     logger.info(f"📤 Retrying contact for listing {listing_id} (attempt {attempt + 1}/{max_retries})...")
                     time.sleep(2)  # Wait before retry
                 
-                # Fresh request each time
-                response = requests.post(
-                    self.CONTACT_API_URL,
-                    impersonate="chrome110",
-                    headers={
-                        "user-agent": self.USER_AGENT,
-                        "accept": "application/json",
-                        "content-type": "text/plain;charset=UTF-8",
-                        "origin": "https://www.immowelt.de",
-                        "referer": "https://www.immowelt.de",
-                        "authorization": f"Bearer {self.tokens.get('oauth.access.token')}"
-                    },
-                    cookies=cookie_jar,
-                    json=payload,
-                    proxies=self.proxies,
-                    timeout=30
+                resp = requests.post(
+                    f"{self.SCRAPPEY_API_URL}?key={scrappey_api_key}",
+                    json=scrappey_payload,
+                    timeout=90,
                 )
                 
+                if resp.status_code != 200:
+                    logger.error(f"❌ Scrappey API error for listing {listing_id}: {resp.status_code}")
+                    if attempt < max_retries - 1:
+                        continue
+                    return False
+                
+                result_data = resp.json()
+                solution = result_data.get("solution", {})
+                status_code = solution.get("statusCode", 0)
+                inner_text = solution.get("innerText", "")
+                
                 # Check for captcha or 403 in response
-                if response.status_code == 403 or 'captcha' in response.text.lower() or '403' in response.text.lower():
+                if status_code == 403 or 'captcha' in inner_text.lower() or '403' in inner_text.lower():
                     logger.warning(f"⚠️ Captcha/403 detected for listing {listing_id} (attempt {attempt + 1}/{max_retries})")
                     if attempt < max_retries - 1:
                         continue
                 
-                if response.status_code in [200, 201]:
+                if status_code in [200, 201]:
                     logger.info(f"✅ Successfully contacted listing {listing_id}")
                     return True
                 else:
-                    logger.error(f"❌ Failed to contact listing {listing_id}: {response.status_code}")
-                    logger.error(f"   Response: {response.text[:500]}")
+                    logger.error(f"❌ Failed to contact listing {listing_id}: {status_code}")
+                    logger.error(f"   Response: {inner_text[:500]}")
                     if attempt < max_retries - 1:
                         continue
                     return False
