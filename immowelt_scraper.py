@@ -97,7 +97,7 @@ class ImmoweltClient:
             logger.info(f"🔐 Starting login for {email}...")
             
             # Create a temporary session just for login flow
-            session = requests.Session(impersonate="chrome107")
+            session = requests.Session(impersonate="chrome131")
             session.headers.update({
                 "User-Agent": self.USER_AGENT,
                 "Accept": "*/*",
@@ -182,7 +182,7 @@ class ImmoweltClient:
                 # Fresh request with current cookies
                 r = requests.get(
                     self.REFRESH_URL,
-                    impersonate="chrome107",
+                    impersonate="chrome131",
                     headers={
                         "User-Agent": self.USER_AGENT,
                         "Accept": "*/*",
@@ -286,7 +286,7 @@ class ImmoweltClient:
                 # Fresh request each time
                 response = requests.post(
                     self.SEARCH_API_URL,
-                    impersonate="chrome107",
+                    impersonate="chrome131",
                     headers={
                         "user-agent": self.USER_AGENT,
                         "accept": "*/*",
