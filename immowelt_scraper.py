@@ -168,6 +168,13 @@ class ImmoweltClient:
         """Refresh tokens using existing cookies."""
         max_retries = 20
         
+        # Build a persistent session with domain-scoped cookies
+        session = requests.Session(impersonate="chrome131")
+        session.headers.update({"Accept": "*/*"})
+        for k, v in self.tokens.items():
+            if k in self.WANTED_KEYS:
+                session.cookies.set(k, v, domain=".immowelt.de")
+        
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
@@ -176,13 +183,8 @@ class ImmoweltClient:
                 else:
                     logger.info("♻️ Refreshing tokens...")
                 
-                # Build cookie jar from current tokens
-                cookie_jar = self.get_cookie_jar()
-                
-                # Fresh request with current cookies
-                r = requests.get(
+                r = session.get(
                     self.REFRESH_URL,
-                    impersonate="chrome131",
                     headers={
                         "Accept": "*/*",
                         "Origin": "https://www.immowelt.de",
@@ -191,7 +193,6 @@ class ImmoweltClient:
                         "Sec-Fetch-Mode": "cors",
                         "Sec-Fetch-Dest": "empty",
                     },
-                    cookies=cookie_jar,
                     proxies=self.proxies
                 )
                 
@@ -207,8 +208,11 @@ class ImmoweltClient:
                         continue
                     return False
                 
-                # Extract updated tokens from response cookies
-                new_tokens = self.extract_tokens_from_cookies(r.cookies)
+                # Extract updated tokens from session cookies (not just response cookies)
+                new_tokens = {}
+                for name, value in session.cookies.items():
+                    if name in self.WANTED_KEYS:
+                        new_tokens[name] = value
                 if new_tokens:
                     self.tokens.update(new_tokens)
                 self.session_created_at = datetime.now().isoformat()
