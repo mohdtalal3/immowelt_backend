@@ -398,13 +398,12 @@ class ImmoweltClient:
                 if attempt > 0:
                     logger.info(f"📤 Retrying contact for listing {listing_id} (attempt {attempt + 1}/{max_retries})...")
                     time.sleep(2)  # Wait before retry
-                
+                   #                     "user-agent": self.USER_AGENT,
                 # Fresh request each time
                 response = requests.post(
                     self.CONTACT_API_URL,
                     impersonate="chrome131",
                     headers={
-                        "user-agent": self.USER_AGENT,
                         "accept": "application/json",
                         "content-type": "text/plain;charset=UTF-8",
                         "origin": "https://www.immowelt.de",
