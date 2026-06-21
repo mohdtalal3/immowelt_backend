@@ -97,7 +97,7 @@ class ImmoweltClient:
             logger.info(f"🔐 Starting login for {email}...")
             
             # Create a temporary session just for login flow
-            session = requests.Session(impersonate="chrome107")
+            session = requests.Session(impersonate="chrome110")
             session.headers.update({
                 "User-Agent": self.USER_AGENT,
                 "Accept": "*/*",
