@@ -8,6 +8,7 @@ from urllib.parse import urljoin
 from supabase import Client
 from curl_cffi import requests
 from logger_config import setup_logger
+from datadome_solver import solve_datadome, extract_captcha_url, DatadomeTokenStore
 
 # Setup logger
 logger = setup_logger('immowelt_scraper')
@@ -35,11 +36,18 @@ class ImmoweltClient:
         "oauth.access.expiration"
     ]
     
-    def __init__(self):
+    def __init__(self, account_email: str = None):
         # Session tokens (no persistent session, create new request each time)
         self.tokens = {}
         self.session_created_at = None
-        
+
+        # Account identity for per-account datadome token caching
+        self.account_email = account_email
+        self.datadome_store = DatadomeTokenStore()
+        self.datadome_token = None
+        if account_email:
+            self.datadome_token = self.datadome_store.get(account_email)
+
         # Setup proxy from ROTATING_PROXY environment variable
         rotating_proxy = os.getenv('ROTATING_PROXY')
         self.proxies = {
@@ -47,18 +55,53 @@ class ImmoweltClient:
             'https': rotating_proxy
         }
         logger.info(f"🔒 Using ROTATING_PROXY: {rotating_proxy.split('@')[-1] if rotating_proxy and '@' in rotating_proxy else rotating_proxy}")
+
+    # ---------------------------------------------------
+    # DataDome Handling
+    # ---------------------------------------------------
+    def handle_datadome(self, response, cookie_jar: dict) -> bool:
+        """
+        Detect a DataDome challenge in a 403 response, solve it via CapSolver,
+        add the token to the cookie jar and cache it per account.
+        Returns True if a new token was obtained, False otherwise.
+        """
+        if response.status_code != 403:
+            return False
+
+        captcha_url = extract_captcha_url(response)
+        if not captcha_url:
+            return False
+
+        if 't=bv' in captcha_url:
+            logger.warning("⚠️ DataDome IP banned (t=bv) - rotating proxy required")
+            return False
+
+        logger.warning("⛔ DataDome challenge detected")
+        try:
+            self.datadome_token = solve_datadome(captcha_url, self.USER_AGENT, os.getenv('ROTATING_PROXY'))
+        except Exception as e:
+            logger.error(f"❌ DataDome solving failed: {e}")
+            return False
+
+        cookie_jar["datadome"] = self.datadome_token
+        if self.account_email:
+            self.datadome_store.save(self.account_email, self.datadome_token)
+        return True
     
     # ---------------------------------------------------
     # Token Management
     # ---------------------------------------------------
     def get_cookie_jar(self) -> dict:
         """Build cookie jar from tokens for requests."""
-        return {
+        jar = {
             "did": self.tokens.get("did"),
             "did_compat": self.tokens.get("did_compat"),
             "auth0": self.tokens.get("auth0"),
             "auth0_compat": self.tokens.get("auth0_compat"),
         }
+        if self.datadome_token:
+            jar["datadome"] = self.datadome_token
+        return jar
     
     def extract_tokens_from_cookies(self, cookies) -> dict:
         """Extract required tokens from response cookies."""
@@ -307,6 +350,8 @@ class ImmoweltClient:
                 # Check for captcha or 403 in response
                 if response.status_code == 403 or 'captcha' in response.text.lower() or '403' in response.text.lower():
                     logger.warning(f"⚠️ Captcha/403 detected during search (attempt {attempt + 1}/{max_retries})")
+                    if self.handle_datadome(response, cookie_jar):
+                        continue
                     if attempt < max_retries - 1:
                         continue
                 
@@ -407,6 +452,7 @@ class ImmoweltClient:
                     self.CONTACT_API_URL,
                     impersonate="chrome131",
                     headers={
+                        "user-agent": self.USER_AGENT,
                         "accept": "application/json",
                         "content-type": "text/plain;charset=UTF-8",
                         "origin": "https://www.immowelt.de",
@@ -422,6 +468,8 @@ class ImmoweltClient:
                 # Check for captcha or 403 in response
                 if response.status_code == 403 or 'captcha' in response.text.lower() or '403' in response.text.lower():
                     logger.warning(f"⚠️ Captcha/403 detected for listing {listing_id} (attempt {attempt + 1}/{max_retries})")
+                    if self.handle_datadome(response, cookie_jar):
+                        continue
                     if attempt < max_retries - 1:
                         continue
                 
@@ -551,7 +599,7 @@ def run_scraper_for_account(account: dict, supabase: Client):
     logger.info(f"{'='*60}")
     
     # Initialize client (will automatically use ROTATING_PROXY from environment)
-    client = ImmoweltClient()
+    client = ImmoweltClient(account_email=account['email'])
     
     # Get configuration from account
     config = account.get('configuration', {})
