@@ -70,6 +70,7 @@ class ImmoweltClient:
 
         captcha_url = extract_captcha_url(response)
         if not captcha_url:
+            logger.warning(f"⚠️ 403 without DataDome challenge URL. Body: {response.text[:200]}")
             return False
 
         if 't=bv' in captcha_url:
@@ -93,15 +94,12 @@ class ImmoweltClient:
     # ---------------------------------------------------
     def get_cookie_jar(self) -> dict:
         """Build cookie jar from tokens for requests."""
-        jar = {
+        return {
             "did": self.tokens.get("did"),
             "did_compat": self.tokens.get("did_compat"),
             "auth0": self.tokens.get("auth0"),
             "auth0_compat": self.tokens.get("auth0_compat"),
         }
-        if self.datadome_token:
-            jar["datadome"] = self.datadome_token
-        return jar
     
     def extract_tokens_from_cookies(self, cookies) -> dict:
         """Extract required tokens from response cookies."""
@@ -350,8 +348,6 @@ class ImmoweltClient:
                 # Check for captcha or 403 in response
                 if response.status_code == 403 or 'captcha' in response.text.lower() or '403' in response.text.lower():
                     logger.warning(f"⚠️ Captcha/403 detected during search (attempt {attempt + 1}/{max_retries})")
-                    if self.handle_datadome(response, cookie_jar):
-                        continue
                     if attempt < max_retries - 1:
                         continue
                 
@@ -434,8 +430,10 @@ class ImmoweltClient:
             "platform": "Website",
         }
         
-        # Build cookie jar for request
+        # Build cookie jar for request (datadome only needed for contact)
         cookie_jar = self.get_cookie_jar()
+        if self.datadome_token:
+            cookie_jar["datadome"] = self.datadome_token
         
         logger.info(f"📤 Contacting listing {listing_id}...")
         
