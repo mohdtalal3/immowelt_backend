@@ -59,6 +59,20 @@ class ImmoweltClient:
     # ---------------------------------------------------
     # DataDome Handling
     # ---------------------------------------------------
+    def _build_contact_session(self):
+        """Create a request session for contact requests (proxy-bound, keep-alive)."""
+        session = requests.Session(impersonate="chrome")
+        session.proxies = self.proxies
+        session.headers.update({
+            "user-agent": self.USER_AGENT,
+            "accept": "application/json",
+            "content-type": "text/plain;charset=UTF-8",
+            "origin": "https://www.immowelt.de",
+            "referer": "https://www.immowelt.de",
+            "authorization": f"Bearer {self.tokens.get('oauth.access.token')}"
+        })
+        return session
+
     def handle_datadome(self, response, cookie_jar: dict) -> bool:
         """
         Detect a DataDome challenge in a 403 response, solve it via CapSolver,
@@ -74,10 +88,9 @@ class ImmoweltClient:
             return False
 
         if 't=bv' in captcha_url:
-            logger.warning("⚠️ DataDome IP banned (t=bv) - rotating proxy required")
-            return False
-
-        logger.warning("⛔ DataDome challenge detected")
+            logger.warning("⚠️ DataDome t=bv detected - refreshing token with new IP")
+        else:
+            logger.warning("⛔ DataDome challenge detected")
         try:
             self.datadome_token = solve_datadome(captcha_url, self.USER_AGENT, os.getenv('ROTATING_PROXY'))
         except Exception as e:
@@ -434,40 +447,34 @@ class ImmoweltClient:
         cookie_jar = self.get_cookie_jar()
         if self.datadome_token:
             cookie_jar["datadome"] = self.datadome_token
-        
+
         logger.info(f"📤 Contacting listing {listing_id}...")
-        
+
         max_retries = 20
-        
+
+        # Proxy-bound session for this contact: same IP for all retries.
+        # On any block the whole session is rotated (fresh connection/IP).
+        session = self._build_contact_session()
+
         for attempt in range(max_retries):
             try:
                 if attempt > 0:
                     logger.info(f"📤 Retrying contact for listing {listing_id} (attempt {attempt + 1}/{max_retries})...")
                     time.sleep(random.uniform(1, 3))  # Random wait before retry
-                   #                     "user-agent": self.USER_AGENT,
-                # Fresh request each time
-                response = requests.post(
+
+                response = session.post(
                     self.CONTACT_API_URL,
-                    impersonate="chrome",
-                    headers={
-                        "user-agent": self.USER_AGENT,
-                        "accept": "application/json",
-                        "content-type": "text/plain;charset=UTF-8",
-                        "origin": "https://www.immowelt.de",
-                        "referer": "https://www.immowelt.de",
-                        "authorization": f"Bearer {self.tokens.get('oauth.access.token')}"
-                    },
                     cookies=cookie_jar,
                     json=payload,
-                    proxies=self.proxies,
                     timeout=30
                 )
-                
+
                 # Check for captcha or 403 in response
                 if response.status_code == 403 or 'captcha' in response.text.lower() or '403' in response.text.lower():
                     logger.warning(f"⚠️ Captcha/403 detected for listing {listing_id} (attempt {attempt + 1}/{max_retries})")
-                    if self.handle_datadome(response, cookie_jar):
-                        continue
+                    # Rotate the full session (new connection/IP) and solve a fresh token
+                    session = self._build_contact_session()
+                    self.handle_datadome(response, cookie_jar)
                     if attempt < max_retries - 1:
                         continue
                 
