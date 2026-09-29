@@ -222,7 +222,7 @@ class ImmoweltClient:
             try:
                 if attempt > 0:
                     logger.info(f"♻️ Refreshing tokens (retry {attempt}/{max_retries})...")
-                    time.sleep(2)  # Wait before retry
+                    time.sleep(random.uniform(1, 3))  # Random wait before retry
                 else:
                     logger.info("♻️ Refreshing tokens...")
                 
@@ -327,7 +327,7 @@ class ImmoweltClient:
             try:
                 if attempt > 0:
                     logger.info(f"🔍 Retrying search (attempt {attempt + 1}/{max_retries})...")
-                    time.sleep(2)  # Wait before retry
+                    time.sleep(random.uniform(1, 3))  # Random wait before retry
                 
                 # Fresh request each time
                 response = requests.post(
@@ -445,12 +445,12 @@ class ImmoweltClient:
             try:
                 if attempt > 0:
                     logger.info(f"📤 Retrying contact for listing {listing_id} (attempt {attempt + 1}/{max_retries})...")
-                    time.sleep(2)  # Wait before retry
+                    time.sleep(random.uniform(1, 3))  # Random wait before retry
                    #                     "user-agent": self.USER_AGENT,
                 # Fresh request each time
                 response = requests.post(
                     self.CONTACT_API_URL,
-                    impersonate="chrome131",
+                    impersonate="chrome",
                     headers={
                         "user-agent": self.USER_AGENT,
                         "accept": "application/json",
