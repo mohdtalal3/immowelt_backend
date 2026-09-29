@@ -88,9 +88,15 @@ class ImmoweltClient:
             return False
 
         if 't=bv' in captcha_url:
-            logger.warning("⚠️ DataDome t=bv detected - refreshing token with new IP")
-        else:
-            logger.warning("⛔ DataDome challenge detected")
+            # t=bv = DataDome blocked this visit. Never send this URL to CapSolver
+            # ("blocked captcha url is not supported"). Drop the datadome cookie,
+            # rotate the session (done by the caller) and retry - the next 403
+            # will carry a fresh, solvable challenge URL (t=fe).
+            logger.warning("⚠️ DataDome t=bv - dropping cookie, rotating session for fresh challenge")
+            cookie_jar.pop("datadome", None)
+            return False
+
+        logger.warning("⛔ DataDome challenge detected")
         try:
             self.datadome_token = solve_datadome(captcha_url, self.USER_AGENT, os.getenv('ROTATING_PROXY'))
         except Exception as e:
